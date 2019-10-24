@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
+using System.Diagnostics;
 
 namespace NetworkSim
 {
@@ -18,12 +19,13 @@ namespace NetworkSim
         readonly int _delayMs;
 
         readonly ArrayPool<byte> _pool = ArrayPool<byte>.Create();
-        readonly Queue<(byte[] buffer, int length)> _flushBuffer = new Queue<(byte[] buffer, int length)>();
+        readonly Queue<ReferenceCountedMemory> _flushBuffer = new Queue<ReferenceCountedMemory>();
 
-        byte[] _currentBuffer;
+        ReferenceCountedMemory _currentBuffer;
         double _sendBandwidthAvailable;
         long _lastFlushTicks;
-        Task _previousSendTask;
+
+        Task _previousSendTask = Task.CompletedTask, _pendingWriteTask = Task.CompletedTask;
         bool _isCompleted;
 
         public ThrottledPipeWriter(PipeWriter baseWriter, int bytesPerSecond, int delayInMilliseconds)
@@ -40,8 +42,8 @@ namespace NetworkSim
                 return;
             }
 
-            _flushBuffer.Enqueue((_currentBuffer, bytes));
-            _currentBuffer = null;
+            _flushBuffer.Enqueue(_currentBuffer.Slice(0, bytes));
+            _currentBuffer.SliceSelf(bytes);
         }
 
         public override void CancelPendingFlush()
@@ -53,45 +55,56 @@ namespace NetworkSim
             CompleteAsync(exception).GetAwaiter().GetResult();
         }
 
-        public override ValueTask CompleteAsync(Exception exception = null)
+        public override async ValueTask CompleteAsync(Exception exception = null)
         {
             if (_isCompleted)
             {
                 throw new InvalidOperationException($"{nameof(ThrottledPipeWriter)} is already completed.");
             }
 
-            _isCompleted = true;
+            // ensure everything is in our send buffer, so we can await it in the helper.
+            await FlushAsync().ConfigureAwait(false);
 
             Task prev = _previousSendTask;
+
+            if (prev.IsFaulted == true)
+            {
+                prev.GetAwaiter().GetResult();
+            }
+
+            _isCompleted = true;
+
             _previousSendTask = CompleteAsyncHelper();
-            return new ValueTask(_previousSendTask);
+            await _previousSendTask.ConfigureAwait(false);
 
             async Task CompleteAsyncHelper()
             {
                 await prev.ConfigureAwait(false);
+                prev = null;
+
                 await _baseWriter.CompleteAsync(exception).ConfigureAwait(false);
             }
         }
 
         public override async ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)
         {
-            while (_flushBuffer.TryDequeue(out (byte[], int) tuple))
+            while (_flushBuffer.TryDequeue(out ReferenceCountedMemory buffer))
             {
-                (byte[] buffer, int bufferLength) = tuple;
-                int bufferOffset = 0;
-
                 do
                 {
-                    long ticks;
+                    // if our writer is giving backpressure, wait for it to allow more data through.
+                    await Volatile.Read(ref _pendingWriteTask).ConfigureAwait(false);
 
-                    while (_sendBandwidthAvailable < 1.0)
+                    // wait until we have some amount of bandwidth available. try to avoid super small "packets".
+                    double desiredMinimumSend = Math.Clamp(_sendBytesPerMillisecond * 50.0, 1.0, buffer.Length);
+                    while (_sendBandwidthAvailable < desiredMinimumSend)
                     {
-                        ticks = Environment.TickCount64;
+                        long ticks = Environment.TickCount64;
                         long ticksSinceLastFlush = ticks - _lastFlushTicks;
 
                         if (ticksSinceLastFlush < 50)
                         {
-                            await Task.Delay(100 - (int)ticksSinceLastFlush, cancellationToken).ConfigureAwait(false);
+                            await Task.Delay(50 - (int)ticksSinceLastFlush).ConfigureAwait(false);
 
                             ticks = Environment.TickCount64;
                             ticksSinceLastFlush = ticks - _lastFlushTicks;
@@ -101,25 +114,29 @@ namespace NetworkSim
                         _sendBandwidthAvailable = Math.Max((int)Math.Min(1000, ticksSinceLastFlush) * _sendBytesPerMillisecond + _sendBandwidthAvailable, _sendBytesPerMillisecond * 1000.0);
                     }
 
-                    int writeSize = (int)Math.Min((long)_sendBandwidthAvailable, bufferLength);
+                    int writeSize = (int)Math.Min((long)_sendBandwidthAvailable, buffer.Length);
 
-                    bufferLength -= writeSize;
-                    SendWithDelay(new ArraySegment<byte>(buffer, bufferOffset, writeSize), bufferLength == 0);
-                    bufferOffset += writeSize;
+                    SendWithDelay(buffer.Slice(0, writeSize));
+
+                    buffer.SliceSelf(writeSize);
+                    _sendBandwidthAvailable -= writeSize;
                 }
-                while (bufferLength != 0);
+                while (buffer.Length != 0);
+
+                buffer.Dispose();
             }
 
             return new FlushResult(false, _isCompleted);
         }
 
-        private void SendWithDelay(ArraySegment<byte> buffer, bool isLastBufferUse)
+        // simulates connection latency by waiting a set number of milliseconds before writing.
+        private void SendWithDelay(ReferenceCountedMemory buffer)
         {
             long sendTicks = Environment.TickCount64 + _delayMs;
 
             Task prev = _previousSendTask;
 
-            if (prev.IsFaulted)
+            if (prev.IsFaulted == true)
             {
                 prev.GetAwaiter().GetResult();
             }
@@ -129,42 +146,153 @@ namespace NetworkSim
             async Task SendWithDelayAsync()
             {
                 await prev.ConfigureAwait(false);
+                prev = null;
 
                 long ticksLeft = sendTicks - Environment.TickCount64;
-                if (ticksLeft < 0)
+                if (ticksLeft > 0)
                 {
                     await Task.Delay((int)ticksLeft).ConfigureAwait(false);
                 }
 
-                await _baseWriter.WriteAsync(buffer).ConfigureAwait(false);
+                ValueTask<FlushResult> writeValueTask = _baseWriter.WriteAsync(buffer.Memory);
+                Task writeTask = writeValueTask.IsCompletedSuccessfully ? Task.CompletedTask : writeValueTask.AsTask();
+                Volatile.Write(ref _pendingWriteTask, writeTask);
 
-                if (isLastBufferUse)
-                {
-                    _pool.Return(buffer.Array);
-                }
+                await writeTask.ConfigureAwait(false);
+                buffer.Dispose();
             }
         }
 
         public override Memory<byte> GetMemory(int sizeHint = 0)
         {
-            return GetBuffer(sizeHint);
+            if (_isCompleted)
+            {
+                throw new InvalidOperationException($"{nameof(ThrottledPipeWriter)} is completed.");
+            }
+
+            if (_currentBuffer.Length != 0 && _currentBuffer.Length >= sizeHint)
+            {
+                return _currentBuffer.Memory;
+            }
+
+            _currentBuffer.Dispose();
+
+            if (sizeHint == 0)
+            {
+                sizeHint = 4096;
+            }
+
+            _currentBuffer = new ReferenceCountedMemory(_pool, sizeHint);
+            Debug.Assert(_currentBuffer.Length >= sizeHint);
+
+            return _currentBuffer.Memory;
         }
 
         public override Span<byte> GetSpan(int sizeHint = 0)
         {
-            return GetBuffer(sizeHint);
+            return GetMemory(sizeHint).Span;
         }
 
-        private byte[] GetBuffer(int sizeHint)
+        // a sliceable pooled buffer.
+        struct ReferenceCountedMemory : IMemoryOwner<byte>
         {
-            if (_currentBuffer?.Length >= sizeHint)
+            State _state;
+            int _offset, _length;
+
+            public int Offset => _offset;
+
+            public int Length => _length;
+
+            private bool IsDisposed => _state == null;
+
+            public Memory<byte> Memory
             {
-                return _currentBuffer;
+                get
+                {
+                    if (IsDisposed) throw new InvalidOperationException($"{nameof(ReferenceCountedMemory)} is already disposed.");
+                    return _state._buffer.AsMemory(_offset, _length);
+                }
             }
 
-            _pool.Return(_currentBuffer);
-            _currentBuffer = _pool.Rent(sizeHint);
-            return _currentBuffer;
+            public ReferenceCountedMemory(ArrayPool<byte> pool, int sizeHint)
+            {
+                _state = new State(pool, sizeHint);
+                _offset = 0;
+                _length = _state._buffer.Length;
+            }
+
+            private ReferenceCountedMemory(State state, int offset, int length)
+            {
+                _state = state;
+                _offset = offset;
+                _length = length;
+            }
+
+            public ReferenceCountedMemory Slice(int offset)
+            {
+                return Slice(offset, _length - offset);
+            }
+
+            public ReferenceCountedMemory Slice(int offset, int length)
+            {
+                if (IsDisposed) throw new InvalidOperationException($"{nameof(ReferenceCountedMemory)} is already disposed.");
+                Interlocked.Increment(ref _state._references);
+                return new ReferenceCountedMemory(_state, _offset + offset, length);
+            }
+
+            public void SliceSelf(int offset)
+            {
+                SliceSelf(offset, _length - offset);
+            }
+
+            public void SliceSelf(int offset, int length)
+            {
+                _offset += offset;
+                _length = length;
+            }
+
+            public ReferenceCountedMemory Move()
+            {
+                ReferenceCountedMemory ret = this;
+                this = default;
+                return ret;
+            }
+
+            public void Dispose()
+            {
+                if (IsDisposed)
+                {
+                    return;
+                }
+
+                if (Interlocked.Decrement(ref _state._references) == 0)
+                {
+                    lock (_state._pool)
+                    {
+                        _state._pool.Return(_state._buffer);
+                    }
+                }
+
+                _state = null;
+            }
+
+            sealed class State
+            {
+                public readonly ArrayPool<byte> _pool;
+                public readonly byte[] _buffer;
+                public int _references;
+
+                public State(ArrayPool<byte> pool, int sizeHint)
+                {
+                    _pool = pool;
+                    _references = 1;
+
+                    lock (pool)
+                    {
+                        _buffer = pool.Rent(sizeHint);
+                    }
+                }
+            }
         }
     }
 }
