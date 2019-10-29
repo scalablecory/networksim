@@ -15,9 +15,7 @@ namespace NetworkSim
         private static readonly Exception s_successSentry = new Exception();
 
         readonly PipeWriter _baseWriter;
-        readonly double _sendBytesPerMillisecond;
-        readonly int _delayMs;
-
+        double _sendBytesPerMillisecond;
         readonly ArrayPool<byte> _pool = ArrayPool<byte>.Create();
         readonly Queue<ReferenceCountedMemory> _flushBuffer = new Queue<ReferenceCountedMemory>();
 
@@ -28,11 +26,19 @@ namespace NetworkSim
         Task _previousSendTask = Task.CompletedTask, _pendingWriteTask = Task.CompletedTask;
         bool _isCompleted;
 
+        public int BytesPerSecond
+        {
+            get => Convert.ToInt32(_sendBytesPerMillisecond * 1000.0);
+            set => _sendBytesPerMillisecond = value * 0.001;
+        }
+
+        public int DelayInMilliseconds { get; set; }
+
         public ThrottledPipeWriter(PipeWriter baseWriter, int bytesPerSecond, int delayInMilliseconds)
         {
             _baseWriter = baseWriter;
-            _sendBytesPerMillisecond = bytesPerSecond * 0.001;
-            _delayMs = delayInMilliseconds;
+            BytesPerSecond = bytesPerSecond;
+            DelayInMilliseconds = delayInMilliseconds;
         }
 
         public override void Advance(int bytes)
@@ -48,6 +54,7 @@ namespace NetworkSim
 
         public override void CancelPendingFlush()
         {
+            //TODO.
         }
 
         public override void Complete(Exception exception = null)
@@ -86,6 +93,7 @@ namespace NetworkSim
             }
         }
 
+        // TODO: cancellation is not supported.
         public override async ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)
         {
             while (_flushBuffer.TryDequeue(out ReferenceCountedMemory buffer))
@@ -95,8 +103,10 @@ namespace NetworkSim
                     // if our writer is giving backpressure, wait for it to allow more data through.
                     await Volatile.Read(ref _pendingWriteTask).ConfigureAwait(false);
 
-                    // wait until we have some amount of bandwidth available. try to avoid super small "packets".
-                    double desiredMinimumSend = Math.Clamp(_sendBytesPerMillisecond * 50.0, 1.0, buffer.Length);
+                    // wait until we have some amount of bandwidth available.
+                    // use a minimum send size to reduce super "small" packets.
+                    double sendBytesPerMillisecond = _sendBytesPerMillisecond;
+                    double desiredMinimumSend = Math.Clamp(sendBytesPerMillisecond * 25.0, 1.0, buffer.Length);
                     while (_sendBandwidthAvailable < desiredMinimumSend)
                     {
                         long ticks = Environment.TickCount64;
@@ -111,7 +121,7 @@ namespace NetworkSim
                         }
 
                         _lastFlushTicks = ticks;
-                        _sendBandwidthAvailable = Math.Max((int)Math.Min(1000, ticksSinceLastFlush) * _sendBytesPerMillisecond + _sendBandwidthAvailable, _sendBytesPerMillisecond * 1000.0);
+                        _sendBandwidthAvailable = Math.Max((int)Math.Min(1000, ticksSinceLastFlush) * sendBytesPerMillisecond + _sendBandwidthAvailable, sendBytesPerMillisecond * 1000.0);
                     }
 
                     int writeSize = (int)Math.Min((long)_sendBandwidthAvailable, buffer.Length);
@@ -132,7 +142,7 @@ namespace NetworkSim
         // simulates connection latency by waiting a set number of milliseconds before writing.
         private void SendWithDelay(ReferenceCountedMemory buffer)
         {
-            long sendTicks = Environment.TickCount64 + _delayMs;
+            long sendTicks = Environment.TickCount64 + DelayInMilliseconds;
 
             Task prev = _previousSendTask;
 
@@ -175,6 +185,7 @@ namespace NetworkSim
                 return _currentBuffer.Memory;
             }
 
+            // buffer is too small, dispose it and create another one.
             _currentBuffer.Dispose();
 
             if (sizeHint == 0)

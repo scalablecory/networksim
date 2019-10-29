@@ -11,8 +11,9 @@ namespace NetworkSim
 {
     class Program
     {
-        const int PingInMilliseconds = 500;
-        const int BandwidthInBytes = 5120;
+        const int PingInMilliseconds = 200;
+        const int ClientBandwidthInBytes = 200;
+        const int ServerBandwidthInBytes = 200;
 
         static async Task Main(string[] args)
         {
@@ -28,15 +29,15 @@ namespace NetworkSim
                 }
             };
 
-            var pipeOptions = new PipeOptions(pauseWriterThreshold: 8192, resumeWriterThreshold: 2048, useSynchronizationContext: false);
+            var pipeOptions = new PipeOptions(pauseWriterThreshold: 256, resumeWriterThreshold: 64, useSynchronizationContext: false);
             var clientBuffer = new Pipe(pipeOptions);
             var serverBuffer = new Pipe(pipeOptions);
 
             PipeReader clientReader = clientBuffer.Reader;
-            PipeWriter clientWriter = new ThrottledPipeWriter(serverBuffer.Writer, BandwidthInBytes, PingInMilliseconds);
+            PipeWriter clientWriter = new ThrottledPipeWriter(serverBuffer.Writer, ClientBandwidthInBytes, PingInMilliseconds);
 
             PipeReader serverReader = serverBuffer.Reader;
-            PipeWriter serverWriter = new ThrottledPipeWriter(clientBuffer.Writer, BandwidthInBytes, PingInMilliseconds);
+            PipeWriter serverWriter = new ThrottledPipeWriter(clientBuffer.Writer, ServerBandwidthInBytes, PingInMilliseconds);
 
             await Task.WhenAll(RunClientSenderAsync(), RunClientReceiverAsync(), RunServerAsync()).ConfigureAwait(false);
 
