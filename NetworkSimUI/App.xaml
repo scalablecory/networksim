@@ -1,9 +1,17 @@
-﻿<Application x:Class="NetworkSimUI.App"
+﻿<Application x:Class="NetworkSim.UI.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:NetworkSimUI"
+             xmlns:local="clr-namespace:NetworkSim.UI"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <Style TargetType="Label">
+            <Setter Property="Label.Padding" Value="0"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="TextBox.MinHeight" Value="23"/>
+        </Style>
+        <Style TargetType="Window">
+            <Setter Property="Window.Background" Value="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"/>
+        </Style>
     </Application.Resources>
 </Application>

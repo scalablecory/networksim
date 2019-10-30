@@ -8,9 +8,9 @@ using System.Threading.Tasks;
 
 namespace NetworkSim
 {
-    delegate void StreamMeasurementEvent(double bytesReadPerSecond, double bytesWrittenPerSecond);
-
-    sealed class MeasuredStream : Stream
+    public delegate void StreamMeasurementEvent(double bytesReadPerSecond, double bytesWrittenPerSecond);
+    
+    public sealed class InstrumentedStream : Stream
     {
         readonly Stream _baseStream;
         readonly Timer _timer;
@@ -32,7 +32,7 @@ namespace NetworkSim
 
         public override long Position { get => _baseStream.Position; set => _baseStream.Position = value; }
 
-        public MeasuredStream(Stream baseStream)
+        public InstrumentedStream(Stream baseStream)
         {
             _baseStream = baseStream;
             _timer = new Timer(o => ((State)o).OnMeasurement(), _state, 1000, 1000);
