@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipelines;
 using System.Linq;
@@ -57,13 +58,51 @@ namespace NetworkSim.UI
 
     public sealed class MainWindowModel : INotifyPropertyChanging, INotifyPropertyChanged
     {
+        private const int HttpPort = 54321;
+        private const int HttpsPort = 43210;
+
         private CancellationTokenSource _cancellation = new CancellationTokenSource();
         private readonly InMemoryHttpServer _server = new InMemoryHttpServer();
 
         public event PropertyChangingEventHandler PropertyChanging;
         public event PropertyChangedEventHandler PropertyChanged;
 
-        private bool _isStopped = false;
+        private readonly float[] _samples = new float[60];
+        private int _sampleStart, _sampleCount;
+
+        private PathGeometry _samplesCache;
+        public PathGeometry Samples
+        {
+            get
+            {
+                if (_samplesCache != null)
+                {
+                    return _samplesCache;
+                }
+
+                PathSegmentCollection segments = new PathSegmentCollection();
+
+                for (int i = 0; i < _sampleCount;)
+                {
+                    float sample = _samples[(i + _sampleStart) % _samples.Length];
+                    double x = 5.0 * ++i;
+
+                    segments.Add(new LineSegment(new Point(x, sample), true));
+                }
+
+                _samplesCache = new PathGeometry
+                {
+                    Figures = new PathFigureCollection
+                    {
+                        new PathFigure { StartPoint = new Point(0.0, 0.0), Segments = segments }
+                    }
+                };
+
+                return _samplesCache;
+            }
+        }
+
+        private bool _isStopped = true;
         public bool IsStopped
         {
             get => _isStopped;
@@ -78,29 +117,29 @@ namespace NetworkSim.UI
             }
         }
 
-        public int ClientSendBandwidth
+        public double ClientUploadBandwidth
         {
-            get => _server.ClientSendBytesPerSecond;
+            get => _server.ClientSendBytesPerSecond / 1024 / 1024;
             set
             {
                 if (value != _server.ClientSendBytesPerSecond)
                 {
                     OnPropertyChanging();
-                    _server.ClientSendBytesPerSecond = value;
+                    _server.ClientSendBytesPerSecond = Convert.ToInt32(value * 1024 * 1024);
                     OnPropertyChanged();
                 }
             }
         }
 
-        public int ServerSendBandwidth
+        public double ClientDownloadBandwidth
         {
-            get => _server.ServerSendBytesPerSecond;
+            get => _server.ServerSendBytesPerSecond / 1024 / 1024;
             set
             {
                 if (value != _server.ServerSendBytesPerSecond)
                 {
                     OnPropertyChanging();
-                    _server.ServerSendBytesPerSecond = value;
+                    _server.ServerSendBytesPerSecond = Convert.ToInt32(value * 1024 * 1024);
                     OnPropertyChanged();
                 }
             }
@@ -132,7 +171,7 @@ namespace NetworkSim.UI
 
         public MainWindowModel()
         {
-            _server.Configure(54321, 43210, builder =>
+            _server.Configure(HttpPort, HttpsPort, builder =>
             {
                 builder.MapGet("/", async ctx =>
                 {
@@ -159,7 +198,7 @@ namespace NetworkSim.UI
 
             try
             {
-                IsStopped = true;
+                IsStopped = false;
 
                 await _server.StartAsync(_cancellation.Token);
                 await RunClientAsync();
@@ -185,74 +224,63 @@ namespace NetworkSim.UI
 
         private async Task RunClientAsync()
         {
-            TaskScheduler scheduler = TaskScheduler.FromCurrentSynchronizationContext();
+            TaskScheduler uiScheduler = TaskScheduler.FromCurrentSynchronizationContext();
 
-            using var client = new HttpClient();
+            using var handler = new SocketsHttpHandler
+            {
+                SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+                {
+                    RemoteCertificateValidationCallback = delegate { return true; }
+                }
+            };
+            using var client = new HttpClient(handler)
+            {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
             using var req = new HttpRequestMessage
             {
-                Method = System.Net.Http.HttpMethod.Post,
-                RequestUri = new Uri($"https://127.0.0.1:43210/"),
-                Version = System.Net.HttpVersion.Version20
+                Method = System.Net.Http.HttpMethod.Get,
+                RequestUri = new Uri($"https://localhost:{HttpsPort}/"),
+                Version = System.Net.HttpVersion.Version20,
             };
 
             using HttpResponseMessage res = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             using Stream baseStream = await res.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using InstrumentedStream stream = new InstrumentedStream(baseStream);
 
+            Task previousMeasurementUpdate = Task.CompletedTask;
+
             StreamMeasurementEvent onMeasurement = (bytesReadPerSecond, bytesWrittenPerSecond) =>
             {
-                _ = Task.Factory.StartNew(o =>
-                {
+                double kbps = bytesReadPerSecond / 1024.0;
+                Debug.WriteLine($"NetworkSimUI: measuring {kbps:N1} KiB/sec.");
 
-                }, this, _cancellation.Token, TaskCreationOptions.None, scheduler);
+                previousMeasurementUpdate = previousMeasurementUpdate
+                    .ContinueWith((_, o) =>
+                    {
+                        OnPropertyChanging(nameof(Samples));
+
+                        _samples[(_sampleStart + _sampleCount) % _samples.Length] = (float)kbps;
+                        ++(_sampleCount < _samples.Length ? ref _sampleCount : ref _sampleStart);
+                        _samplesCache = null;
+
+                        OnPropertyChanged(nameof(Samples));
+                    }, this, _cancellation.Token, TaskContinuationOptions.None, uiScheduler);
             };
 
-            byte[] buffer = new byte[4096];
-            int len;
-
-            while ((len = await stream.ReadAsync(buffer).ConfigureAwait(false)) != 0)
+            stream.Measurement += onMeasurement;
+            try
             {
+                byte[] buffer = new byte[4096];
+                int len;
+
+                while ((len = await stream.ReadAsync(buffer).ConfigureAwait(false)) != 0)
+                {
+                }
             }
-        }
-
-        sealed class DuplexContent : HttpContent
-        {
-            private TaskCompletionSource<Stream> _waitForStream;
-            private TaskCompletionSource<bool> _waitForCompletion;
-
-            public DuplexContent()
+            finally
             {
-                _waitForStream = new TaskCompletionSource<Stream>(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
-
-            protected override bool TryComputeLength(out long length)
-            {
-                length = 0;
-                return false;
-            }
-
-            protected override async Task SerializeToStreamAsync(Stream stream, TransportContext context)
-            {
-                _waitForCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _waitForStream.SetResult(stream);
-                await _waitForCompletion.Task;
-            }
-
-            public Task<Stream> WaitForStreamAsync()
-            {
-                return _waitForStream.Task;
-            }
-
-            public void Complete()
-            {
-                _waitForCompletion.SetResult(true);
-                _waitForCompletion = null;
-            }
-
-            public void Fail(Exception e)
-            {
-                _waitForCompletion.SetException(e);
-                _waitForCompletion = null;
+                stream.Measurement -= onMeasurement;
             }
         }
 

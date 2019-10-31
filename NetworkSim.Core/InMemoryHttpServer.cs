@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
@@ -59,22 +60,23 @@ namespace NetworkSim
             _listenerFactory = listenerFactory;
             _host =
                 WebHost.CreateDefaultBuilder()
-                .UseSetting("preventHostingStartup", "true")
+                .UseSetting(WebHostDefaults.PreventHostingStartupKey, "true")
                 .UseKestrel(ko =>
                 {
                     ko.Listen(IPAddress.Loopback, httpPort);
                     ko.Listen(IPAddress.Loopback, httpsPort, listenOptions =>
                     {
+                        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
                         listenOptions.UseHttps(CreateSelfSignedCert());
                     });
                 })
                 .ConfigureServices(services =>
                 {
-                    services.AddSingleton<IConnectionListenerFactory>(listenerFactory);
+                    //services.AddSingleton<IConnectionListenerFactory>(listenerFactory);
                 })
                 .ConfigureLogging(logging =>
                 {
-                    logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+                    logging.AddFilter("Microsoft.AspNetCore", LogLevel.Information);
                 })
                 .Configure(builder =>
                 {

@@ -120,7 +120,7 @@ namespace NetworkSim
                 long lastTicks = Volatile.Read(ref _lastMeasurement);
                 Volatile.Write(ref _lastMeasurement, curTicks);
 
-                double rCurTicks = 1000.0 / (lastTicks - curTicks);
+                double rCurTicks = 1000.0 / (curTicks - lastTicks);
                 MeasurementEvent?.Invoke(bytesRead * rCurTicks, bytesWritten * rCurTicks);
             }
         }

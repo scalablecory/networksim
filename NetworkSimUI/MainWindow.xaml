@@ -5,10 +5,11 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:NetworkSim.UI"
         mc:Ignorable="d"
+        x:Name="w"
         Title="MainWindow" Height="450" Width="800"
         Loaded="Window_Loaded"
         Unloaded="Window_Unloaded">
-    <Grid Margin="11">
+    <Grid Margin="11" DataContext="{Binding ElementName=w,Path=Model}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="7"/>
@@ -26,25 +27,19 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Label Grid.Row="0" Grid.Column="0" Target="{Binding ElementName=clientBandwidthText}">Client send bandwidth:</Label>
-        <TextBox Grid.Row="2" Grid.Column="0" Text="{Binding ClientSendBandwidth}" x:Name="clientBandwidthText"/>
+        <Label Grid.Row="0" Grid.Column="0" Target="{Binding ElementName=clientBandwidthText}">Client download bandwidth in MiB/s:</Label>
+        <TextBox Grid.Row="2" Grid.Column="0" Text="{Binding Path=ClientDownloadBandwidth,StringFormat=F1}" x:Name="clientBandwidthText"/>
 
-        <Label Grid.Row="0" Grid.Column="2" Target="{Binding ElementName=serverBandwidthText}">Server send bandwidth:</Label>
-        <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding ServerSendBandwidth}" x:Name="serverBandwidthText"/>
+        <Label Grid.Row="0" Grid.Column="2" Target="{Binding ElementName=serverBandwidthText}">Client upload bandwidth in MiB/s:</Label>
+        <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding Path=ClientUploadBandwidth,StringFormat=F1}" x:Name="serverBandwidthText"/>
 
-        <Label Grid.Row="0" Grid.Column="4" Target="{Binding ElementName=latencyText}">Latency (one-way):</Label>
+        <Label Grid.Row="0" Grid.Column="4" Target="{Binding ElementName=latencyText}">Latency in milliseconds, one-way:</Label>
         <TextBox Grid.Row="2" Grid.Column="4" Text="{Binding Latency}" x:Name="latencyText"/>
 
         <Border Grid.Row="4" Grid.ColumnSpan="6" BorderThickness="1" BorderBrush="Black" Background="White">
-            <Path Stroke="Black" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Path.Data>
-                    <PathGeometry>
-                        <PathGeometry.Figures>
-                            <PathFigure StartPoint="0,0" x:Name="pathFigure"/>
-                        </PathGeometry.Figures>
-                    </PathGeometry>
-                </Path.Data>
-            </Path>
+            <Viewbox Stretch="Fill" x:Name="chartView">
+                <Path Stroke="Black" StrokeThickness="1" Data="{Binding Path=Samples,Mode=OneWay}"/>
+            </Viewbox>
         </Border>
     </Grid>
 </Window>

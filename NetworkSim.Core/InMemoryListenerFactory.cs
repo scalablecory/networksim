@@ -250,9 +250,11 @@ namespace NetworkSim
         sealed class State
         {
             public int
-                _serverSendBytesPerSecond, _clientSendBytesPerSecond,
-                _serverReceiveBufferSize, _clientReceiveBufferSize,
-                _latency;
+                _serverSendBytesPerSecond = 10 * 1024 * 1024,
+                _clientSendBytesPerSecond = 1 * 1024 * 1024,
+                _serverReceiveBufferSize = 16 * 1024,
+                _clientReceiveBufferSize = 16 * 1024,
+                _latency = 50;
         }
     }
 }
