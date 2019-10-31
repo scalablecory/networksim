@@ -30,13 +30,13 @@
         </Grid.RowDefinitions>
 
         <Label Grid.Row="0" Grid.Column="0" Target="{Binding ElementName=clientBandwidthText}">Client download bandwidth in MiB/s:</Label>
-        <TextBox Grid.Row="2" Grid.Column="0" Text="{Binding Path=ClientDownloadBandwidth,StringFormat=F1}" x:Name="clientBandwidthText"/>
+        <TextBox Grid.Row="2" Grid.Column="0" Text="{Binding Path=ClientDownloadBandwidth,StringFormat=F1,Delay=250,UpdateSourceTrigger=PropertyChanged}" x:Name="clientBandwidthText"/>
 
         <Label Grid.Row="0" Grid.Column="2" Target="{Binding ElementName=serverBandwidthText}">Client upload bandwidth in MiB/s:</Label>
-        <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding Path=ClientUploadBandwidth,StringFormat=F1}" x:Name="serverBandwidthText"/>
+        <TextBox Grid.Row="2" Grid.Column="2" Text="{Binding Path=ClientUploadBandwidth,StringFormat=F1,Delay=250,UpdateSourceTrigger=PropertyChanged}" x:Name="serverBandwidthText"/>
 
         <Label Grid.Row="0" Grid.Column="4" Target="{Binding ElementName=latencyText}">Latency in milliseconds, one-way:</Label>
-        <TextBox Grid.Row="2" Grid.Column="4" Text="{Binding Latency}" x:Name="latencyText"/>
+        <TextBox Grid.Row="2" Grid.Column="4" Text="{Binding Path=Latency,Delay=250,UpdateSourceTrigger=PropertyChanged}" x:Name="latencyText"/>
 
         <Border Grid.Row="4" Grid.ColumnSpan="6" BorderThickness="1" BorderBrush="Black" Background="White" Padding="10">
             <Grid>

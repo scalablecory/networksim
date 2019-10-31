@@ -21,7 +21,7 @@ namespace NetworkSim
     public sealed class InMemoryHttpServer
     {
         private IWebHost _host;
-        private InMemoryListenerFactory _listenerFactory;
+        private InMemoryListenerFactory _listenerFactory = new InMemoryListenerFactory();
 
         public int ServerSendBytesPerSecond
         {
@@ -55,9 +55,8 @@ namespace NetworkSim
 
         public void Configure(int httpPort, int httpsPort, Action<IEndpointRouteBuilder> action)
         {
-            var listenerFactory = new InMemoryListenerFactory();
+            var listenerFactory = _listenerFactory;
 
-            _listenerFactory = listenerFactory;
             _host =
                 WebHost.CreateDefaultBuilder()
                 .UseSetting(WebHostDefaults.PreventHostingStartupKey, "true")

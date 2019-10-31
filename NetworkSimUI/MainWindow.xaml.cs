@@ -64,6 +64,10 @@ namespace NetworkSim.UI
         private CancellationTokenSource _cancellation = new CancellationTokenSource();
         private readonly InMemoryHttpServer _server = new InMemoryHttpServer();
 
+        private readonly SemaphoreSlim _restartLock = new SemaphoreSlim(1);
+        private Task _currentRun = Task.CompletedTask;
+        private int _restartCounter = 0;
+
         public event PropertyChangingEventHandler PropertyChanging;
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -230,6 +234,7 @@ namespace NetworkSim.UI
                     OnPropertyChanging();
                     _server.ClientSendBytesPerSecond = Convert.ToInt32(value * 1024 * 1024);
                     OnPropertyChanged();
+                    RestartAfterDelay();
                 }
             }
         }
@@ -244,6 +249,7 @@ namespace NetworkSim.UI
                     OnPropertyChanging();
                     _server.ServerSendBytesPerSecond = Convert.ToInt32(value * 1024 * 1024);
                     OnPropertyChanged();
+                    RestartAfterDelay();
                 }
             }
         }
@@ -258,6 +264,7 @@ namespace NetworkSim.UI
                     OnPropertyChanging();
                     _server.LatencyMilliseconds = value;
                     OnPropertyChanged();
+                    RestartAfterDelay();
                 }
             }
         }
@@ -274,54 +281,89 @@ namespace NetworkSim.UI
 
         public MainWindowModel()
         {
-            _server.Configure(HttpPort, HttpsPort, builder =>
-            {
-                builder.MapGet("/", async ctx =>
-                {
-                    ctx.Response.Headers.Add("content-type", "application/octet-stream");
-                    await ctx.Response.StartAsync().ConfigureAwait(false);
-
-                    PipeWriter writer = ctx.Response.BodyWriter;
-                    while (!_cancellation.IsCancellationRequested)
-                    {
-                        Memory<byte> memory = writer.GetMemory();
-                        writer.Advance(Math.Min(memory.Length, 4096));
-                        await writer.FlushAsync().ConfigureAwait(false);
-                    }
-                });
-            });
         }
 
-        public async void Start()
+        public void Start()
         {
-            if (!IsStopped)
-            {
-                return;
-            }
+            _currentRun = StartHelperAsync();
 
-            try
+            async Task StartHelperAsync()
             {
-                IsStopped = false;
+                if (!IsStopped)
+                {
+                    return;
+                }
 
-                await _server.StartAsync(_cancellation.Token);
-                await RunClientAsync();
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, "Exception", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                Stop();
-                await _server.StopAsync();
+                try
+                {
+                    IsStopped = false;
 
-                _cancellation.Dispose();
-                _cancellation = new CancellationTokenSource();
+                    _server.Configure(HttpPort, HttpsPort, builder =>
+                    {
+                        builder.MapGet("/", async ctx =>
+                        {
+                            ctx.Response.Headers.Add("content-type", "application/octet-stream");
+                            await ctx.Response.StartAsync().ConfigureAwait(false);
 
-                IsStopped = true;
+                            PipeWriter writer = ctx.Response.BodyWriter;
+                            while (!_cancellation.IsCancellationRequested)
+                            {
+                                Memory<byte> memory = writer.GetMemory();
+                                writer.Advance(Math.Min(memory.Length, 4096));
+                                await writer.FlushAsync().ConfigureAwait(false);
+                            }
+                        });
+                    });
+
+                    await _server.StartAsync(_cancellation.Token);
+                    await RunClientAsync();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Exception", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    Stop();
+                    await _server.StopAsync();
+
+                    _cancellation.Dispose();
+                    _cancellation = new CancellationTokenSource();
+
+                    IsStopped = true;
+                }
+            }
+        }
+
+        public void Stop()
+        {
+            if (!_cancellation.IsCancellationRequested)
+            {
+                _cancellation.Cancel();
+            }
+        }
+
+        private async void RestartAfterDelay()
+        {
+            int token = ++_restartCounter;
+            await Task.Delay(1000);
+
+            if (token == _restartCounter)
+            {
+                await _restartLock.WaitAsync();
+                try
+                {
+                    Stop();
+                    await _currentRun;
+                    Start();
+                }
+                finally
+                {
+                    _restartLock.Release();
+                }
             }
         }
 
@@ -388,14 +430,6 @@ namespace NetworkSim.UI
             finally
             {
                 stream.Measurement -= onMeasurement;
-            }
-        }
-
-        public void Stop()
-        {
-            if (!_cancellation.IsCancellationRequested)
-            {
-                _cancellation.Cancel();
             }
         }
     }
