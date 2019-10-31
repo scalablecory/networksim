@@ -25,6 +25,8 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="11"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <Label Grid.Row="0" Grid.Column="0" Target="{Binding ElementName=clientBandwidthText}">Client download bandwidth in MiB/s:</Label>
@@ -36,10 +38,13 @@
         <Label Grid.Row="0" Grid.Column="4" Target="{Binding ElementName=latencyText}">Latency in milliseconds, one-way:</Label>
         <TextBox Grid.Row="2" Grid.Column="4" Text="{Binding Latency}" x:Name="latencyText"/>
 
-        <Border Grid.Row="4" Grid.ColumnSpan="6" BorderThickness="1" BorderBrush="Black" Background="White">
-            <Viewbox Stretch="Fill" x:Name="chartView">
-                <Path Stroke="Black" StrokeThickness="1" Data="{Binding Path=Samples,Mode=OneWay}"/>
-            </Viewbox>
+        <Border Grid.Row="4" Grid.ColumnSpan="6" BorderThickness="1" BorderBrush="Black" Background="White" Padding="10">
+            <Grid>
+                <Path Stroke="Blue" StrokeThickness="2" Data="{Binding Path=Samples,Mode=OneWay}" Stretch="Fill"/>
+                <Path Stroke="Red" StrokeThickness="1" StrokeDashArray="2 4" Data="{Binding Path=LegendGeometry,Mode=OneWay}" Stretch="Fill"/>
+            </Grid>
         </Border>
+
+        <TextBlock Grid.Row="6" Grid.ColumnSpan="6" HorizontalAlignment="Right" Text="{Binding Path=CurrentSpeed,Mode=OneWay}"/>
     </Grid>
 </Window>

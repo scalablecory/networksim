@@ -80,25 +80,128 @@ namespace NetworkSim.UI
                     return _samplesCache;
                 }
 
+                double minSample = 0.0;
+                double maxSample = 0.0;
+                double currentSample = 0.0;
+                double currentSpeed = 0.0;
+
+                for (int i = 0; i < _sampleCount; ++i)
+                {
+                    double sample = _samples[(i + _sampleStart) % _samples.Length];
+                    if (sample > maxSample) maxSample = sample;
+                }
+
                 PathSegmentCollection segments = new PathSegmentCollection();
 
-                for (int i = 0; i < _sampleCount;)
-                {
-                    float sample = _samples[(i + _sampleStart) % _samples.Length];
-                    double x = 5.0 * ++i;
+                Point startPoint = default;
 
-                    segments.Add(new LineSegment(new Point(x, sample), true));
+                for (int i = 0; i < _sampleCount; ++i)
+                {
+                    double sample = _samples[(i + _sampleStart) % _samples.Length];
+
+                    double y = maxSample - sample;
+                    double x = 5.0 * i;
+
+                    var p = new Point(x, y);
+
+                    if (i != 0)
+                    {
+                        segments.Add(new LineSegment(p, true));
+                    }
+                    else
+                    {
+                        startPoint = p;
+                    }
+
+                    currentSample = y;
+                    currentSpeed = sample;
+                    if (y > minSample) minSample = y;
                 }
+
+                _legendGeometry = new PathGeometry
+                {
+                    Figures = new PathFigureCollection
+                    {
+                        // base line
+                        new PathFigure
+                        {
+                            StartPoint = new Point(0.0, minSample),
+                            Segments = new PathSegmentCollection
+                            {
+                                new LineSegment(new Point(_sampleCount * 5.0, minSample), false)
+                            }
+                        },
+                        
+                        // maximum line
+                        new PathFigure
+                        {
+                            StartPoint = new Point(0.0, 0.0),
+                            Segments = new PathSegmentCollection
+                            {
+                                new LineSegment(new Point(_sampleCount * 5.0, 0.0), false)
+                            }
+                        },
+                        
+                        // current line
+                        new PathFigure
+                        {
+                            StartPoint = new Point(0.0, currentSample),
+                            Segments = new PathSegmentCollection
+                            {
+                                new LineSegment(new Point(_sampleCount * 5.0, currentSample), true)
+                            }
+                        }
+                    }
+                };
+
+                string currentSpeedUnits;
+
+                if (currentSpeed > 1024 * 1024)
+                {
+                    currentSpeed /= 1024 * 1024;
+                    currentSpeedUnits = "GiB/s";
+                }
+                else if (currentSpeed > 1024)
+                {
+                    currentSpeed /= 1024;
+                    currentSpeedUnits = "MiB/s";
+                }
+                else
+                {
+                    currentSpeedUnits = "KiB/s";
+                }
+
+                _currentSpeed = $"{currentSpeed:N1} {currentSpeedUnits}";
 
                 _samplesCache = new PathGeometry
                 {
                     Figures = new PathFigureCollection
                     {
-                        new PathFigure { StartPoint = new Point(0.0, 0.0), Segments = segments }
+                        new PathFigure { StartPoint = startPoint, Segments = segments }
                     }
                 };
 
                 return _samplesCache;
+            }
+        }
+
+        private PathGeometry _legendGeometry;
+        public PathGeometry LegendGeometry
+        {
+            get
+            {
+                _ = Samples;
+                return _legendGeometry;
+            }
+        }
+
+        private string _currentSpeed;
+        public string CurrentSpeed
+        {
+            get
+            {
+                _ = Samples;
+                return _currentSpeed;
             }
         }
 
@@ -259,12 +362,16 @@ namespace NetworkSim.UI
                     .ContinueWith((_, o) =>
                     {
                         OnPropertyChanging(nameof(Samples));
+                        OnPropertyChanging(nameof(LegendGeometry));
+                        OnPropertyChanging(nameof(CurrentSpeed));
 
                         _samples[(_sampleStart + _sampleCount) % _samples.Length] = (float)kbps;
                         ++(_sampleCount < _samples.Length ? ref _sampleCount : ref _sampleStart);
                         _samplesCache = null;
 
                         OnPropertyChanged(nameof(Samples));
+                        OnPropertyChanged(nameof(LegendGeometry));
+                        OnPropertyChanged(nameof(CurrentSpeed));
                     }, this, _cancellation.Token, TaskContinuationOptions.None, uiScheduler);
             };
 
