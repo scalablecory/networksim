@@ -92,8 +92,7 @@ namespace NetworkSim
 
         private sealed class InMemoryListener : IConnectionListener
         {
-            readonly Channel<InMemoryConnectionContext> _accepts = Channel.CreateUnbounded<InMemoryConnectionContext>();
-            readonly Channel<InMemoryConnectionContext> _connects = Channel.CreateUnbounded<InMemoryConnectionContext>();
+            readonly Channel<TaskCompletionSource<InMemoryConnectionContext>> _accepts = Channel.CreateUnbounded<TaskCompletionSource<InMemoryConnectionContext>>();
             readonly CancellationTokenSource _cancellationTokenSource;
             readonly State _state;
 
@@ -111,9 +110,18 @@ namespace NetworkSim
                 using CancellationTokenSource opCancellationSource = CreateLinkedSource(cancellationToken);
                 CancellationToken opToken = (opCancellationSource ?? _cancellationTokenSource).Token;
 
-                InMemoryConnectionContext ctx = await _accepts.Reader.ReadAsync(opToken);
-                await _connects.Writer.WriteAsync(ctx, opToken).ConfigureAwait(false);
-                return ctx.ClientTransport;
+                while (true)
+                {
+                    // pull an accept from the queue.
+                    TaskCompletionSource<InMemoryConnectionContext> tcs = await _accepts.Reader.ReadAsync(opToken);
+
+                    // try to connect the accept. it may have been cancelled from the accept end.
+                    var ctx = new InMemoryConnectionContext(_state);
+                    if (tcs.TrySetResult(ctx))
+                    {
+                        return ctx.ClientTransport;
+                    }
+                }
             }
 
             public async ValueTask<ConnectionContext> AcceptAsync(CancellationToken cancellationToken = default)
@@ -121,9 +129,15 @@ namespace NetworkSim
                 using CancellationTokenSource opCancellationSource = CreateLinkedSource(cancellationToken);
                 CancellationToken opToken = (opCancellationSource ?? _cancellationTokenSource).Token;
 
-                var ctx = new InMemoryConnectionContext(_state);
-                await _accepts.Writer.WriteAsync(ctx, opToken).ConfigureAwait(false);
-                return await _connects.Reader.ReadAsync(opToken).ConfigureAwait(false);
+                // add to the accept queue.
+                TaskCompletionSource<InMemoryConnectionContext> tcs = new TaskCompletionSource<InMemoryConnectionContext>();
+                await _accepts.Writer.WriteAsync(tcs, cancellationToken).ConfigureAwait(false);
+
+                using (opToken.UnsafeRegister(_ => tcs.TrySetCanceled(opToken), null))
+                {
+                    // wait for the accept to get connected.
+                    return await tcs.Task.ConfigureAwait(false);
+                }
             }
 
             CancellationTokenSource CreateLinkedSource(CancellationToken cancellationToken)
@@ -162,6 +176,8 @@ namespace NetworkSim
             IDictionary<object, object> _items;
             string _connectionId;
 
+            readonly object _sync = new object();
+
             public override string ConnectionId
             {
                 get => _connectionId ??= Interlocked.Increment(ref s_ids).ToString(CultureInfo.InvariantCulture);
@@ -177,7 +193,7 @@ namespace NetworkSim
             }
 
             public override IDuplexPipe Transport { get; set; }
-            public DuplexPipeStream ClientTransport { get; }
+            public DuplexPipeStream ClientTransport { get; private set; }
 
             bool IFeatureCollection.IsReadOnly => false;
 

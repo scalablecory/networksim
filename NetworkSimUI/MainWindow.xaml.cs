@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -10,6 +11,7 @@ using System.IO.Pipelines;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -269,6 +271,8 @@ namespace NetworkSim.UI
             }
         }
 
+        public ObservableCollection<string> ServerLog { get; } = new ObservableCollection<string>();
+
         private void OnPropertyChanging([CallerMemberName] string propertyName = null)
         {
             PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(propertyName));
@@ -315,15 +319,17 @@ namespace NetworkSim.UI
                         });
                     });
 
+                    Task logger = RunLoggerAync(_cancellation.Token);
                     await _server.StartAsync(_cancellation.Token);
                     await RunClientAsync();
+                    await logger;
                 }
                 catch (OperationCanceledException)
                 {
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(ex.Message, "Exception", MessageBoxButton.OK, MessageBoxImage.Error);
+                    ServerLog.Add("Start: " + ex.ToString());
                 }
                 finally
                 {
@@ -371,14 +377,7 @@ namespace NetworkSim.UI
         {
             TaskScheduler uiScheduler = TaskScheduler.FromCurrentSynchronizationContext();
 
-            using var handler = new SocketsHttpHandler
-            {
-                SslOptions = new System.Net.Security.SslClientAuthenticationOptions
-                {
-                    RemoteCertificateValidationCallback = delegate { return true; }
-                }
-            };
-            using var client = new HttpClient(handler)
+            using var client = new HttpClient(_server.CreateHttpHandler())
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
@@ -430,6 +429,27 @@ namespace NetworkSim.UI
             finally
             {
                 stream.Measurement -= onMeasurement;
+            }
+        }
+
+        private async Task RunLoggerAync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (true)
+                {
+                    string log = "ASP.NET: " + await _server.GetNextLogAsync(cancellationToken);
+
+                    if (ServerLog.Count == 100)
+                    {
+                        ServerLog.RemoveAt(99);
+                    }
+                    ServerLog.Insert(0, log);
+                }
+            }
+            catch (OperationCanceledException ex) when (ex.CancellationToken == cancellationToken)
+            {
+                // do nothing.
             }
         }
     }

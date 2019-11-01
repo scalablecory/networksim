@@ -1,8 +1,6 @@
 ﻿using System;
 using System.IO;
 using System.IO.Pipelines;
-using System.Net.Http;
-using System.Net.NetworkInformation;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,7 +9,7 @@ namespace NetworkSim
 {
     class Program
     {
-        const int PingInMilliseconds = 200;
+        const int PingInMilliseconds = 50;
         const int ClientBandwidthInBytes = 200;
         const int ServerBandwidthInBytes = 200;
 

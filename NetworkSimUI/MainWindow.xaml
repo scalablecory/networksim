@@ -27,6 +27,8 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="5"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="11"/>
+            <RowDefinition Height="100"/>
         </Grid.RowDefinitions>
 
         <Label Grid.Row="0" Grid.Column="0" Target="{Binding ElementName=clientBandwidthText}">Client download bandwidth in MiB/s:</Label>
@@ -46,5 +48,7 @@
         </Border>
 
         <TextBlock Grid.Row="6" Grid.ColumnSpan="6" HorizontalAlignment="Right" Text="{Binding Path=CurrentSpeed,Mode=OneWay}"/>
+
+        <ListBox Grid.Row="8" Grid.ColumnSpan="6" ItemsSource="{Binding Path=ServerLog,Mode=OneTime}"/>
     </Grid>
 </Window>
