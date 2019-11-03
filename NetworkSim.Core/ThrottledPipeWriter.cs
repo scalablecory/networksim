@@ -23,7 +23,7 @@ namespace NetworkSim
         double _sendBandwidthAvailable;
         long _lastFlushTicks;
 
-        Task _previousSendTask = Task.CompletedTask, _pendingWriteTask = Task.CompletedTask;
+        volatile Task _previousSendTask = Task.CompletedTask, _pendingWriteTask = Task.CompletedTask;
         readonly int _sendDelayInMs;
         bool _isCompleted;
 
@@ -32,6 +32,7 @@ namespace NetworkSim
             _baseWriter = baseWriter;
             _sendBytesPerMillisecond = bytesPerSecond * 0.001;
             _sendDelayInMs = delayInMilliseconds;
+            _lastFlushTicks = Environment.TickCount64;
         }
 
         public override void Advance(int bytes)
@@ -94,26 +95,25 @@ namespace NetworkSim
                 do
                 {
                     // if our writer is giving backpressure, wait for it to allow more data through.
-                    await Volatile.Read(ref _pendingWriteTask).ConfigureAwait(false);
+                    await _pendingWriteTask.ConfigureAwait(false);
 
                     // wait until we have some amount of bandwidth available.
-                    // use a minimum send size to reduce super "small" packets.
+                    // use a minimum send size to reduce super small "packets".
                     double desiredMinimumSend = Math.Clamp(_sendBytesPerMillisecond * 25.0, 1.0, buffer.Length);
-                    while (_sendBandwidthAvailable < desiredMinimumSend)
+                    if (_sendBandwidthAvailable < desiredMinimumSend)
                     {
-                        long ticks = Environment.TickCount64;
-                        long ticksSinceLastFlush = ticks - _lastFlushTicks;
+                        long ticksNeeded = (long)Math.Ceiling(desiredMinimumSend / _sendBytesPerMillisecond);
+                        long curTicks = Environment.TickCount64;
 
-                        if (ticksSinceLastFlush < 50)
+                        if (curTicks < _lastFlushTicks + ticksNeeded)
                         {
-                            await Task.Delay(50 - (int)ticksSinceLastFlush).ConfigureAwait(false);
-
-                            ticks = Environment.TickCount64;
-                            ticksSinceLastFlush = ticks - _lastFlushTicks;
+                            long ticksToWait = _lastFlushTicks + ticksNeeded - curTicks;
+                            await Task.Delay((int)ticksToWait).ConfigureAwait(false);
+                            curTicks = Environment.TickCount64;
                         }
 
-                        _lastFlushTicks = ticks;
-                        _sendBandwidthAvailable = Math.Max((int)Math.Min(1000, ticksSinceLastFlush) * _sendBytesPerMillisecond + _sendBandwidthAvailable, _sendBytesPerMillisecond * 1000.0);
+                        _sendBandwidthAvailable = Math.Min(_sendBandwidthAvailable + (curTicks - _lastFlushTicks) * _sendBytesPerMillisecond, _sendBytesPerMillisecond * 1000.0);
+                        _lastFlushTicks = curTicks;
                     }
 
                     int writeSize = (int)Math.Min((long)_sendBandwidthAvailable, buffer.Length);
@@ -158,7 +158,7 @@ namespace NetworkSim
 
                 ValueTask<FlushResult> writeValueTask = _baseWriter.WriteAsync(buffer.Memory);
                 Task writeTask = writeValueTask.IsCompletedSuccessfully ? Task.CompletedTask : writeValueTask.AsTask();
-                Volatile.Write(ref _pendingWriteTask, writeTask);
+                _pendingWriteTask = writeTask;
 
                 await writeTask.ConfigureAwait(false);
                 buffer.Dispose();
