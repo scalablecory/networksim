@@ -75,19 +75,27 @@ namespace NetworkSim
 
         private async ValueTask<InMemoryListener> GetListenerAsync(int port)
         {
-            if (_listeners.TryGetValue(port, out InMemoryListener listener))
-            {
-                return listener;
-            }
+            // this has a race condition but is fine for a test app :).
 
-            listener = new InMemoryListener(_state, new IPEndPoint(IPAddress.Any, port));
-            if (_listeners.TryAdd(port, listener))
+            while (true)
             {
-                return listener;
-            }
+                if (_listeners.TryGetValue(port, out InMemoryListener listener))
+                {
+                    if (!listener.IsDisposed)
+                    {
+                        return listener;
+                    }
 
-            await listener.DisposeAsync().ConfigureAwait(false);
-            return _listeners[port];
+                    ((ICollection<KeyValuePair<int, InMemoryListener>>)_listeners).Remove(new KeyValuePair<int, InMemoryListener>(port, listener));
+                }
+
+                listener = new InMemoryListener(_state, new IPEndPoint(IPAddress.Any, port));
+                
+                if (!_listeners.TryAdd(port, listener))
+                {
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
 
         private sealed class InMemoryListener : IConnectionListener
@@ -97,6 +105,8 @@ namespace NetworkSim
             readonly State _state;
 
             public EndPoint EndPoint { get; }
+
+            public bool IsDisposed => _cancellationTokenSource.IsCancellationRequested;
 
             public InMemoryListener(State state, EndPoint endPoint)
             {
@@ -226,11 +236,14 @@ namespace NetworkSim
 
             public InMemoryConnectionContext(State state)
             {
-                var serverOptions = new PipeOptions(pauseWriterThreshold: state._serverReceiveBufferSize);
-                var clientOptions = new PipeOptions(pauseWriterThreshold: state._clientReceiveBufferSize);
+                var serverOptions = new PipeOptions(pauseWriterThreshold: state._serverReceiveBufferSize, resumeWriterThreshold: state._serverReceiveBufferSize / 2);
+                var clientOptions = new PipeOptions(pauseWriterThreshold: state._clientReceiveBufferSize, resumeWriterThreshold: state._clientReceiveBufferSize / 2);
 
                 var server = new Pipe(serverOptions);
                 var client = new Pipe(clientOptions);
+
+                //Transport = new DuplexPipeStream(server.Reader, client.Writer);
+                //ClientTransport = new DuplexPipeStream(client.Reader, server.Writer);
 
                 Transport = new DuplexPipeStream(server.Reader, new ThrottledPipeWriter(client.Writer, state._serverSendBytesPerSecond, state._latency));
                 ClientTransport = new DuplexPipeStream(client.Reader, new ThrottledPipeWriter(server.Writer, state._clientSendBytesPerSecond, state._latency));
@@ -266,11 +279,11 @@ namespace NetworkSim
         sealed class State
         {
             public int
-                _serverSendBytesPerSecond = 10 * 1024 * 1024,
-                _clientSendBytesPerSecond = 1 * 1024 * 1024,
-                _serverReceiveBufferSize = 16 * 1024,
-                _clientReceiveBufferSize = 16 * 1024,
-                _latency = 50;
+                _serverSendBytesPerSecond = 100 * 1024 * 1024,
+                _clientSendBytesPerSecond = 10 * 1024 * 1024,
+                _serverReceiveBufferSize = 64 * 1024,
+                _clientReceiveBufferSize = 64 * 1024,
+                _latency = 25;
         }
     }
 }
