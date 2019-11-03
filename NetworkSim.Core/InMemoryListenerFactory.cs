@@ -281,8 +281,8 @@ namespace NetworkSim
             public int
                 _serverSendBytesPerSecond = 100 * 1024 * 1024,
                 _clientSendBytesPerSecond = 10 * 1024 * 1024,
-                _serverReceiveBufferSize = 64 * 1024,
-                _clientReceiveBufferSize = 64 * 1024,
+                _serverReceiveBufferSize = 1024 * 1024,
+                _clientReceiveBufferSize = 1024 * 1024,
                 _latency = 25;
         }
     }
